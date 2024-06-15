@@ -1,18 +1,14 @@
 import telebot
 import subprocess
 import shlex
-import asyncio
 
 # Replace 'YOUR_TOKEN' with your actual bot token obtained from BotFather
 TOKEN = '6306399777:AAGO0tUcRAL_jbApX45y8VwBqCCQ6gXa5uw'
 
-# Maximum length of each message chunk
-MAX_MESSAGE_LENGTH = 4000  # Slightly below Telegram's maximum for safety
-
 # Create bot object
 bot = telebot.TeleBot(TOKEN)
 
-# Dictionary to store session information for pagination
+# Dictionary to store session information for each user
 session_data = {}
 
 # Function to execute shell commands securely
@@ -32,82 +28,85 @@ def execute_command(command):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# Function to send long messages by splitting into chunks
-async def send_long_message(chat_id, text):
-    # Split text into chunks
-    chunks = [text[i:i + MAX_MESSAGE_LENGTH] for i in range(0, len(text), MAX_MESSAGE_LENGTH)]
-    
-    # Send each chunk as a separate message
-    for chunk in chunks:
-        await bot.send_message(chat_id, chunk, parse_mode='Markdown')
-
 # Handler for /start command
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    bot.send_message(message.chat.id, "Hi! I'm your ultra-advanced bot. Send me a command to execute on the server.")
+    bot.send_message(message.chat.id, "Hi! I'm your terminal-like bot. Send me a command to execute on the server.")
 
-# Handler for /exec command
+# Handler for user messages
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    try:
+        user_id = message.chat.id
+        
+        # Check if the user has an active session
+        if user_id not in session_data:
+            session_data[user_id] = {'current_command': ''}
+        
+        # Retrieve the current command being constructed
+        current_command = session_data[user_id]['current_command']
+        
+        # Concatenate the incoming message to the current command
+        if message.text.startswith('/'):
+            bot.send_message(user_id, "Invalid command. Please continue typing your current command or start a new one.")
+        else:
+            session_data[user_id]['current_command'] += message.text.strip() + ' '
+            bot.send_message(user_id, f"Command in progress: `{session_data[user_id]['current_command']}`", parse_mode='Markdown')
+    
+    except Exception as e:
+        bot.send_message(user_id, f"Error handling your message: {str(e)}")
+
+# Handler for /exec command to execute the constructed command
 @bot.message_handler(commands=['exec'])
 def handle_execute(message):
     try:
-        # Get the command sent by the user
-        command = message.text.split(' ', 1)[1]
+        user_id = message.chat.id
         
-        # Execute the command securely
-        output = execute_command(command)
-        
-        # Store session data for pagination
-        session_data[message.chat.id] = {'output': output}
-        
-        # Send the output of the command back to the user
-        if output:
-            if len(output) > MAX_MESSAGE_LENGTH:
-                bot.send_message(message.chat.id, f"Command: `{command}`\nOutput:\n```\n{output[:MAX_MESSAGE_LENGTH]}\n```", parse_mode='Markdown')
-                send_long_message(message.chat.id, output[MAX_MESSAGE_LENGTH:])
+        # Check if there is a command to execute
+        if user_id in session_data and 'current_command' in session_data[user_id]:
+            command = session_data[user_id]['current_command'].strip()
+            
+            # Execute the command securely
+            output = execute_command(command)
+            
+            # Clear current command after execution
+            session_data[user_id]['current_command'] = ''
+            
+            # Send the output of the command back to the user
+            if output:
+                if len(output) > 4000:
+                    bot.send_message(user_id, f"Command: `{command}`\nOutput:\n```\n{output[:4000]}\n```", parse_mode='Markdown')
+                else:
+                    bot.send_message(user_id, f"Command: `{command}`\nOutput:\n```\n{output}\n```", parse_mode='Markdown')
             else:
-                bot.send_message(message.chat.id, f"Command: `{command}`\nOutput:\n```\n{output}\n```", parse_mode='Markdown')
-        else:
-            bot.send_message(message.chat.id, f"No output returned for command: `{command}`", parse_mode='Markdown')
-    
-    except IndexError:
-        bot.send_message(message.chat.id, "No command provided. Please use /exec <command>.")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"Error executing command: {str(e)}")
-
-# Handler for /next command to paginate long outputs
-@bot.message_handler(commands=['next'])
-def handle_next(message):
-    try:
-        # Get session data for the user
-        if message.chat.id in session_data and 'output' in session_data[message.chat.id]:
-            output = session_data[message.chat.id]['output']
-            
-            # Get the page number from session data or default to 1
-            page_number = session_data[message.chat.id].get('page_number', 1)
-            
-            # Calculate start and end indexes for pagination
-            start_index = (page_number - 1) * MAX_MESSAGE_LENGTH
-            end_index = start_index + MAX_MESSAGE_LENGTH
-            
-            # Get the current page text
-            current_page = output[start_index:end_index]
-            
-            # Send the current page
-            bot.send_message(message.chat.id, f"Page {page_number}:\n```\n{current_page}\n```", parse_mode='Markdown')
-            
-            # Update page number for next /next command
-            session_data[message.chat.id]['page_number'] = page_number + 1
+                bot.send_message(user_id, f"No output returned for command: `{command}`", parse_mode='Markdown')
         
         else:
-            bot.send_message(message.chat.id, "No stored output found. Execute a command using /exec first.")
+            bot.send_message(user_id, "No command to execute. Start typing a command or continue with your current command.")
 
     except Exception as e:
-        bot.send_message(message.chat.id, f"Error fetching next page: {str(e)}")
+        bot.send_message(user_id, f"Error executing command: {str(e)}")
+
+# Handler for /cancel command to cancel the current command
+@bot.message_handler(commands=['cancel'])
+def handle_cancel(message):
+    try:
+        user_id = message.chat.id
+        
+        # Check if there is a command in progress to cancel
+        if user_id in session_data and 'current_command' in session_data[user_id]:
+            session_data[user_id]['current_command'] = ''
+            bot.send_message(user_id, "Current command cancelled. Start typing a new command.")
+        else:
+            bot.send_message(user_id, "No command in progress to cancel.")
+    
+    except Exception as e:
+        bot.send_message(user_id, f"Error cancelling command: {str(e)}")
 
 # Error handling
 @bot.message_handler(func=lambda message: True)
 def handle_invalid(message):
-    bot.send_message(message.chat.id, "Invalid command. Please use /exec <command> to execute a command.")
+    bot.send_message(message.chat.id, "Invalid command. Please start a new command or continue typing your current command.")
 
 # Polling loop
 bot.polling()
