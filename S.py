@@ -8,103 +8,47 @@ TOKEN = '6306399777:AAGO0tUcRAL_jbApX45y8VwBqCCQ6gXa5uw'
 # Create bot object
 bot = telebot.TeleBot(TOKEN)
 
-# Dictionary to store session information for each user
-session_data = {}
-
 # Function to execute shell commands securely
-def execute_command(command, chat_id):
+def execute_command(command):
     try:
         # Split the command safely using shlex
         cmd_parts = shlex.split(command)
         
-        # Start subprocess to execute the command
-        process = subprocess.Popen(cmd_parts, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Execute the command securely
+        result = subprocess.run(cmd_parts, capture_output=True, text=True)
         
-        # Read and send real-time output
-        for stdout_line in iter(process.stdout.readline, ""):
-            bot.send_message(chat_id, stdout_line.strip())
-        
-        # Wait for the process to complete
-        process.communicate()
-        
-        # Check for errors
-        if process.returncode != 0:
-            bot.send_message(chat_id, f"Command '{command}' failed with error code {process.returncode}")
-    
+        # Return the command output
+        return result.stdout.strip()
     except Exception as e:
-        bot.send_message(chat_id, f"Error executing command: {str(e)}")
+        return f"Error: {str(e)}"
+
+# Function to send long messages in chunks
+def send_long_message(chat_id, text):
+    max_message_length = 3000  # Telegram message length limit
+    for i in range(0, len(text), max_message_length):
+        bot.send_message(chat_id, text[i:i+max_message_length])
 
 # Handler for /start command
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    bot.send_message(message.chat.id, "Hi! I'm your advanced bot. Send me a command to execute on the server.")
+    bot.send_message(message.chat.id, "Hi! I'm your bot. Send me a command to execute on the server.")
 
-# Handler for user messages
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    try:
-        user_id = message.chat.id
-        
-        # Check if the user has an active session
-        if user_id not in session_data:
-            session_data[user_id] = {'current_command': ''}
-        
-        # Retrieve the current command being constructed
-        current_command = session_data[user_id]['current_command']
-        
-        # Concatenate the incoming message to the current command
-        if message.text.startswith('/'):
-            bot.send_message(user_id, "Invalid command. Please continue typing your current command or start a new one.")
-        else:
-            session_data[user_id]['current_command'] += message.text.strip() + ' '
-            bot.send_message(user_id, f"Command in progress: `{session_data[user_id]['current_command']}`", parse_mode='Markdown')
-    
-    except Exception as e:
-        bot.send_message(user_id, f"Error handling your message: {str(e)}")
-
-# Handler for /exec command to execute the constructed command
+# Handler for /exec command
 @bot.message_handler(commands=['exec'])
 def handle_execute(message):
-    try:
-        user_id = message.chat.id
-        
-        # Check if there is a command to execute
-        if user_id in session_data and 'current_command' in session_data[user_id]:
-            command = session_data[user_id]['current_command'].strip()
-            
-            # Clear current command after execution
-            session_data[user_id]['current_command'] = ''
-            
-            # Execute the command securely
-            bot.send_message(user_id, f"Executing command: `{command}`", parse_mode='Markdown')
-            execute_command(command, user_id)
-        
-        else:
-            bot.send_message(user_id, "No command to execute. Start typing a command or continue with your current command.")
-
-    except Exception as e:
-        bot.send_message(user_id, f"Error executing command: {str(e)}")
-
-# Handler for /cancel command to cancel the current command
-@bot.message_handler(commands=['cancel'])
-def handle_cancel(message):
-    try:
-        user_id = message.chat.id
-        
-        # Check if there is a command in progress to cancel
-        if user_id in session_data and 'current_command' in session_data[user_id]:
-            session_data[user_id]['current_command'] = ''
-            bot.send_message(user_id, "Current command cancelled. Start typing a new command.")
-        else:
-            bot.send_message(user_id, "No command in progress to cancel.")
+    # Get the command sent by the user
+    command = message.text.split(' ', 1)[1]
     
-    except Exception as e:
-        bot.send_message(user_id, f"Error cancelling command: {str(e)}")
+    # Execute the command securely
+    output = execute_command(command)
+    
+    # Send the output of the command back to the user in chunks
+    send_long_message(message.chat.id, f"Command: `{command}`\nOutput:\n```\n{output}\n```")
 
 # Error handling
 @bot.message_handler(func=lambda message: True)
 def handle_invalid(message):
-    bot.send_message(message.chat.id, "Invalid command. Please start a new command or continue typing your current command.")
+    bot.send_message(message.chat.id, "Invalid command. Please use /exec <command> to execute a command.")
 
 # Polling loop
 bot.polling()
