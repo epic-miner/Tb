@@ -1,12 +1,16 @@
 import telebot
 import subprocess
 import shlex
+import os
 
 # Replace 'YOUR_TOKEN' with your actual bot token obtained from BotFather
 TOKEN = '6306399777:AAGO0tUcRAL_jbApX45y8VwBqCCQ6gXa5uw'
 
 # Create bot object
 bot = telebot.TeleBot(TOKEN)
+
+# Dictionary to store command history per user
+command_history = {}
 
 # Function to execute shell commands securely
 def execute_command(command):
@@ -28,6 +32,17 @@ def send_long_message(chat_id, text):
     for i in range(0, len(text), max_message_length):
         bot.send_message(chat_id, text[i:i+max_message_length])
 
+# Function to send command history in chunks
+def send_command_history(chat_id, user_id):
+    if user_id in command_history:
+        history = command_history[user_id]
+        if history:
+            send_long_message(chat_id, "Command History:\n" + "\n".join(history))
+        else:
+            bot.send_message(chat_id, "Command history is empty.")
+    else:
+        bot.send_message(chat_id, "Command history is empty.")
+
 # Handler for /start command
 @bot.message_handler(commands=['start'])
 def handle_start(message):
@@ -42,13 +57,41 @@ def handle_execute(message):
     # Execute the command securely
     output = execute_command(command)
     
+    # Store command in history
+    user_id = message.from_user.id
+    if user_id not in command_history:
+        command_history[user_id] = []
+    command_history[user_id].append(f"Command: {command}\nOutput:\n{output}")
+    
     # Send the output of the command back to the user in chunks
     send_long_message(message.chat.id, f"Command: `{command}`\nOutput:\n```\n{output}\n```")
+
+# Handler for /history command
+@bot.message_handler(commands=['history'])
+def handle_history(message):
+    send_command_history(message.chat.id, message.from_user.id)
 
 # Error handling
 @bot.message_handler(func=lambda message: True)
 def handle_invalid(message):
     bot.send_message(message.chat.id, "Invalid command. Please use /exec <command> to execute a command.")
+
+# Inline keyboard pagination for command history
+@bot.callback_query_handler(func=lambda call: call.data.startswith('page'))
+def callback_paging(call):
+    user_id = call.from_user.id
+    if user_id in command_history:
+        history = command_history[user_id]
+        if history:
+            page_number = int(call.data.split('_')[1])
+            start_index = (page_number - 1) * 5
+            end_index = start_index + 5
+            page_commands = history[start_index:end_index]
+            send_long_message(call.message.chat.id, "\n".join(page_commands))
+        else:
+            bot.send_message(call.message.chat.id, "Command history is empty.")
+    else:
+        bot.send_message(call.message.chat.id, "Command history is empty.")
 
 # Polling loop
 bot.polling()
