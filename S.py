@@ -12,26 +12,32 @@ bot = telebot.TeleBot(TOKEN)
 session_data = {}
 
 # Function to execute shell commands securely
-def execute_command(command):
+def execute_command(command, chat_id):
     try:
         # Split the command safely using shlex
         cmd_parts = shlex.split(command)
         
-        # Execute the command securely
-        result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=60)
+        # Start subprocess to execute the command
+        process = subprocess.Popen(cmd_parts, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
-        # Return the command output
-        return result.stdout.strip()
+        # Read and send real-time output
+        for stdout_line in iter(process.stdout.readline, ""):
+            bot.send_message(chat_id, stdout_line.strip())
+        
+        # Wait for the process to complete
+        process.communicate()
+        
+        # Check for errors
+        if process.returncode != 0:
+            bot.send_message(chat_id, f"Command '{command}' failed with error code {process.returncode}")
     
-    except subprocess.TimeoutExpired:
-        return "Error: Command execution timed out."
     except Exception as e:
-        return f"Error: {str(e)}"
+        bot.send_message(chat_id, f"Error executing command: {str(e)}")
 
 # Handler for /start command
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    bot.send_message(message.chat.id, "Hi! I'm your terminal-like bot. Send me a command to execute on the server.")
+    bot.send_message(message.chat.id, "Hi! I'm your advanced bot. Send me a command to execute on the server.")
 
 # Handler for user messages
 @bot.message_handler(func=lambda message: True)
@@ -66,20 +72,12 @@ def handle_execute(message):
         if user_id in session_data and 'current_command' in session_data[user_id]:
             command = session_data[user_id]['current_command'].strip()
             
-            # Execute the command securely
-            output = execute_command(command)
-            
             # Clear current command after execution
             session_data[user_id]['current_command'] = ''
             
-            # Send the output of the command back to the user
-            if output:
-                if len(output) > 4000:
-                    bot.send_message(user_id, f"Command: `{command}`\nOutput:\n```\n{output[:4000]}\n```", parse_mode='Markdown')
-                else:
-                    bot.send_message(user_id, f"Command: `{command}`\nOutput:\n```\n{output}\n```", parse_mode='Markdown')
-            else:
-                bot.send_message(user_id, f"No output returned for command: `{command}`", parse_mode='Markdown')
+            # Execute the command securely
+            bot.send_message(user_id, f"Executing command: `{command}`", parse_mode='Markdown')
+            execute_command(command, user_id)
         
         else:
             bot.send_message(user_id, "No command to execute. Start typing a command or continue with your current command.")
